@@ -12,165 +12,18 @@ const PORT = process.env.PORT || 3000;
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
-// Middleware para procesar JSON y servir la carpeta estática del frontend
+// Middleware para procesar JSON y servir archivos estáticos del frontend
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Detectar automáticamente si existe OpenJDK local (Render) o del sistema
+// Detectar automáticamente ejecutable de OpenJDK local (Render) o del sistema
 const localJavac = path.join(__dirname, 'jdk-17', 'bin', 'javac');
 const localJava = path.join(__dirname, 'jdk-17', 'bin', 'java');
 
 const JAVAC_CMD = fs.existsSync(localJavac) ? `"${localJavac}"` : 'javac';
 const JAVA_CMD = fs.existsSync(localJava) ? `"${localJava}"` : 'java';
 
-// -------------------------------------------------------------
-// RUTAS DE LA API
-// -------------------------------------------------------------
-
-// 1. Obtener la lista completa de ejercicios
-app.get('/api/ejercicios', (req, res) => {
-  const query = 'SELECT id, titulo, dificultad, categoria FROM ejercicios ORDER BY id ASC';
-  db.all(query, [], (err, rows) => {
-    if (err) {
-      return res.status(500).json({ error: 'Error al consultar la base de datos' });
-    }
-    res.json(rows);
-  });
-});
-
-// 2. Obtener un ejercicio específico por su ID
-app.get('/api/ejercicios/:id', (req, res) => {
-  const { id } = req.request ? req.request.params : req.params;
-  const query = 'SELECT * FROM ejercicios WHERE id = ?';
-  db.get(query, [id], (err, row) => {
-    if (err || !row) {
-      return res.status(404).json({ error: 'Ejercicio no encontrado' });
-    }
-    res.json(row);
-  });
-});
-
-// 3. Evaluar el código enviado por el estudiante
-app.post('/api/evaluar', (req, res) => {
-  const { ejercicioId, codigoAlumno } = req.body;
-
-  if (!ejercicioId || !codigoAlumno) {
-    return res.status(400).json({ error: 'Faltan datos requeridos (ejercicioId o codigoAlumno)' });
-  }
-
-  // Obtener el ejercicio de la base de datos para comparar pruebas
-  const query = 'SELECT * FROM ejercicios WHERE id = ?';
-  db.get(query, [ejercicioId], async (err, ejercicio) => {
-    if (err || !ejercicio) {
-      return res.status(404).json({ error: 'Ejercicio no encontrado' });
-    }
-
-    // Crear directorio temporal único para la compilación y ejecución
-    const tempDir = path.join(__dirname, `temp_${Date.now()}_${Math.random().toString(36).substring(7)}`);
-    fs.mkdirSync(tempDir, { recursive: true });
-
-    const javaFilePath = path.join(tempDir, 'Solucion.java');
-    
-    // Crear el código Java envolvente que invoca las pruebas
-    const codigoCompleto = `
-${codigoAlumno}
-
-public class Main {
-    public static void main(String[] args) {
-        try {
-            ${ejercicio.codigo_prueba || ''}
-        } catch (Exception e) {
-            System.err.println("Excepción durante la ejecución: " + e.getMessage());
-            e.printStackTrace();
-        }
-    }
-}
-`;
-
-    fs.writeFileSync(javaFilePath, codigoCompleto);
-
-    // Compilar el archivo Java
-    const compileCmd = `${JAVAC_CMD} -d "${tempDir}" "${javaFilePath}"`;
-
-    exec(compileCmd, async (compileErr, stdoutComp, stderrComp) => {
-      if (compileErr) {
-        // Limpiar archivos temporales
-        limpiarDirectorio(tempDir);
-
-        const feedbackIA = await generarFeedbackIA(
-          ejercicio.titulo,
-          ejercicio.descripcion,
-          codigoAlumno,
-          stderrComp,
-          'Compilación'
-        );
-
-        return res.json({
-          exito: false,
-          tipoError: 'Error de Compilación',
-          consola: stderrComp || compileErr.message,
-          feedbackIA
-        });
-      }
-
-      // Ejecutar el código compilado
-      const runCmd = `${JAVA_CMD} -cp "${tempDir}" Main`;
-
-      exec(runCmd, { timeout: 5000 }, async (runErr, stdoutRun, stderrRun) => {
-        // Limpiar archivos temporales
-        limpiarDirectorio(tempDir);
-
-        if (runErr) {
-          const mensajeError = stderrRun || runErr.message;
-          const feedbackIA = await generarFeedbackIA(
-            ejercicio.titulo,
-            ejercicio.descripcion,
-            codigoAlumno,
-            mensajeError,
-            'Ejecución'
-          );
-
-          return res.json({
-            exito: false,
-            tipoError: 'Error de Ejecución / Timeout',
-            consola: mensajeError,
-            feedbackIA
-          });
-        }
-
-        // Si la prueba imprime "OK" o coincide con la salida esperada
-        const salidaLimpia = stdoutRun.trim();
-        const salidaEsperada = (ejercicio.salida_esperada || '').trim();
-
-        if (salidaEsperada && !salidaLimpia.includes(salidaEsperada) && salidaLimpia !== 'OK') {
-          const feedbackIA = await generarFeedbackIA(
-            ejercicio.titulo,
-            ejercicio.descripcion,
-            codigoAlumno,
-            `Salida obtenida: "${salidaLimpia}". Se esperaba: "${salidaEsperada}"`,
-            'Lógica / Resultado Incorrecto'
-          );
-
-          return res.json({
-            exito: false,
-            tipoError: 'Resultado Incorrecto',
-            consola: `Salida recibida:\n${salidaLimpia}\n\nSalida esperada:\n${salidaEsperada}`,
-            feedbackIA
-          });
-        }
-
-        // Si todo pasa exitosamente
-        res.json({
-          exito: true,
-          mensaje: '¡Excelente! Tu solución ha pasado todas las pruebas correctamente.',
-          consola: salidaLimpia
-        });
-      });
-    });
-  });
-});
-
-// Helper para limpiar carpetas temporales
+// Helper para limpiar directorios temporales
 function limpiarDirectorio(dirPath) {
   try {
     if (fs.existsSync(dirPath)) {
@@ -218,6 +71,179 @@ Instrucciones:
     return 'No se pudo generar la sugerencia de la IA en este momento. Revisa el mensaje de la consola para más detalles.';
   }
 }
+
+// -------------------------------------------------------------
+// RUTAS DE LA API
+// -------------------------------------------------------------
+
+// 1. Obtener la lista completa de ejercicios
+app.get('/api/ejercicios', (req, res) => {
+  const query = 'SELECT id, titulo, dificultad, categoria FROM ejercicios ORDER BY id ASC';
+  db.all(query, [], (err, rows) => {
+    if (err) {
+      return res.status(500).json({ error: 'Error al consultar la base de datos' });
+    }
+    res.json(rows);
+  });
+});
+
+// 2. Obtener un ejercicio específico por su ID
+app.get('/api/ejercicios/:id', (req, res) => {
+  const { id } = req.params;
+  const query = 'SELECT * FROM ejercicios WHERE id = ?';
+  db.get(query, [id], (err, row) => {
+    if (err || !row) {
+      return res.status(404).json({ error: 'Ejercicio no encontrado' });
+    }
+    res.json(row);
+  });
+});
+
+// 3. Evaluar el código enviado por el estudiante
+app.post('/api/evaluar', (req, res) => {
+  const { ejercicioId, codigoAlumno } = req.body;
+
+  if (!ejercicioId || !codigoAlumno) {
+    return res.status(400).json({ error: 'Faltan datos requeridos (ejercicioId o codigoAlumno)' });
+  }
+
+  const query = 'SELECT * FROM ejercicios WHERE id = ?';
+  db.get(query, [ejercicioId], async (err, ejercicio) => {
+    if (err) {
+      console.error('Error al consultar BD:', err);
+      return res.status(500).json({ error: 'Error al consultar la base de datos' });
+    }
+
+    if (!ejercicio) {
+      return res.status(404).json({ error: 'Ejercicio no encontrado' });
+    }
+
+    // Crear carpeta temporal única para la compilación y ejecución
+    const tempDir = path.join(__dirname, `temp_${Date.now()}_${Math.floor(Math.random() * 1000)}`);
+
+    try {
+      fs.mkdirSync(tempDir, { recursive: true });
+
+      // Validar campos de prueba de la base de datos con respaldos seguros
+      const testCode = ejercicio.codigo_prueba || ejercicio.casos_prueba || '';
+      const expectedOutput = (ejercicio.salida_esperada || '').trim();
+
+      // Generar el código Java completo envolvente
+      const codigoCompleto = `
+${codigoAlumno}
+
+public class Main {
+    public static void main(String[] args) {
+        try {
+            ${testCode}
+        } catch (Exception e) {
+            System.err.println("Excepción durante la ejecución: " + e.getMessage());
+        }
+    }
+}
+`;
+
+      const javaFilePath = path.join(tempDir, 'Solucion.java');
+      fs.writeFileSync(javaFilePath, codigoCompleto);
+
+      // Compilar el archivo Java
+      const compileCmd = `${JAVAC_CMD} -d "${tempDir}" "${javaFilePath}"`;
+
+      exec(compileCmd, async (compileErr, stdoutComp, stderrComp) => {
+        if (compileErr) {
+          limpiarDirectorio(tempDir);
+
+          let feedbackIA = 'No se pudo generar retroalimentación de la IA.';
+          try {
+            feedbackIA = await generarFeedbackIA(
+              ejercicio.titulo || 'Ejercicio Java',
+              ejercicio.descripcion || '',
+              codigoAlumno,
+              stderrComp || compileErr.message,
+              'Compilación'
+            );
+          } catch (e) {
+            console.error('Error invocando IA:', e.message);
+          }
+
+          return res.json({
+            exito: false,
+            tipoError: 'Error de Compilación',
+            consola: stderrComp || compileErr.message,
+            feedbackIA
+          });
+        }
+
+        // Ejecutar el código compilado
+        const runCmd = `${JAVA_CMD} -cp "${tempDir}" Main`;
+
+        exec(runCmd, { timeout: 5000 }, async (runErr, stdoutRun, stderrRun) => {
+          limpiarDirectorio(tempDir);
+
+          if (runErr) {
+            const errorMsg = stderrRun || runErr.message;
+            let feedbackIA = 'No se pudo generar retroalimentación de la IA.';
+            try {
+              feedbackIA = await generarFeedbackIA(
+                ejercicio.titulo || 'Ejercicio Java',
+                ejercicio.descripcion || '',
+                codigoAlumno,
+                errorMsg,
+                'Ejecución'
+              );
+            } catch (e) {
+              console.error('Error invocando IA:', e.message);
+            }
+
+            return res.json({
+              exito: false,
+              tipoError: 'Error de Ejecución',
+              consola: errorMsg,
+              feedbackIA
+            });
+          }
+
+          // Validar salida obtenida
+          const salidaLimpia = stdoutRun.trim();
+
+          if (expectedOutput && !salidaLimpia.includes(expectedOutput) && salidaLimpia !== 'OK') {
+            let feedbackIA = 'No se pudo generar retroalimentación de la IA.';
+            try {
+              feedbackIA = await generarFeedbackIA(
+                ejercicio.titulo || 'Ejercicio Java',
+                ejercicio.descripcion || '',
+                codigoAlumno,
+                `Salida obtenida: "${salidaLimpia}". Se esperaba: "${expectedOutput}"`,
+                'Lógica / Resultado Incorrecto'
+              );
+            } catch (e) {
+              console.error('Error invocando IA:', e.message);
+            }
+
+            return res.json({
+              exito: false,
+              tipoError: 'Resultado Incorrecto',
+              consola: `Salida recibida:\n${salidaLimpia}\n\nSalida esperada:\n${expectedOutput}`,
+              feedbackIA
+            });
+          }
+
+          // Prueba exitosa
+          return res.json({
+            exito: true,
+            mensaje: '¡Excelente! Tu solución ha pasado todas las pruebas correctamente.',
+            consola: salidaLimpia
+          });
+        });
+      });
+
+    } catch (e) {
+      console.error('Error en el proceso de evaluación:', e);
+      limpiarDirectorio(tempDir);
+      return res.status(500).json({ error: 'Error interno en la preparación del archivo Java: ' + e.message });
+    }
+  });
+});
 
 // Iniciar servidor Express
 app.listen(PORT, () => {
