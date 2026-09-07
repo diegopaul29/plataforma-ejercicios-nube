@@ -30,50 +30,56 @@ function limpiarDirectorio(dirPath) {
   }
 }
 
-// Helper para consultar la API de Gemini con manejo dinámico y detallado
+// Helper para consultar la API de Gemini
 async function generarFeedbackIA(titulo, descripcion, codigo, errorConsola, fase) {
-  const currentApiKey = process.env.GEMINI_API_KEY || '';
+  const apiKey = process.env.GEMINI_API_KEY || '';
 
-  if (!currentApiKey) {
-    console.warn('GEMINI_API_KEY no está configurada en las variables de entorno.');
+  if (!apiKey) {
+    console.warn('GEMINI_API_KEY no se encuentra configurada en las variables de entorno.');
     return 'Nota: Configura la variable GEMINI_API_KEY en Render para recibir explicaciones automáticas con Inteligencia Artificial.';
   }
 
   const prompt = `
-Eres un tutor pedagógico de Java amigable, claro y alentador.
-Un estudiante envió un código que generó un error en la fase de [${fase}].
-
-Ejercicio: "${titulo}"
-Descripción del ejercicio: ${descripcion}
+Eres un tutor pedagógico de Java.
+El estudiante resolvió el ejercicio "${titulo}": ${descripcion}
 
 Código del estudiante:
 \`\`\`java
 ${codigo}
 \`\`\`
 
-Mensaje de error exacto del compilador (javac) / ejecución:
+Ocurrió un error en la fase de [${fase}]:
 \`\`\`
 ${errorConsola}
 \`\`\`
 
-Instrucciones para tu respuesta:
-1. Revisa la línea del código que señala el compilador.
-2. Explica de forma sencilla en 2 oraciones qué significa el error técnico (por ejemplo, si usó una condición numérica en un 'if' que requiere booleano, o si falta un tipo de retorno).
-3. Proporciona una pista concreta orientada a la línea afectada para corregirlo, SIN darle el código con la solución completa.
-4. Mantén un tono motivador.
+Instrucciones:
+1. Analiza detenidamente el error generado por el compilador o la ejecución.
+2. Explica qué significa el error de forma muy sencilla en 2 oraciones adaptadas a principiantes.
+3. Si el error involucra condiciones en 'if' o incompatibilidad de tipos (ej. int a boolean), explícale claramente la diferencia entre evaluar un entero y usar una condición lógica (ej. num > 0).
+4. Dale una pista concreta sobre cómo arreglarlo SIN darle el código con la solución completa.
+5. Sé motivador.
 `;
 
   try {
-    const genAI = new GoogleGenerativeAI(currentApiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
-    if (text) return text;
-    return 'No se pudo generar la sugerencia de la IA en este momento. Revisa el mensaje de la consola para más detalles.';
+    const genAI = new GoogleGenerativeAI(apiKey);
+    // Intentamos con gemini-1.5-flash
+    let model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    let result = await model.generateContent(prompt);
+    let response = await result.response;
+    return response.text();
   } catch (err) {
-    console.error('Error detallado al invocar Gemini API:', err);
-    return `Ocurrió un inconveniente al consultar a la IA (${err.message}). Revisa el mensaje de error de la consola de Java.`;
+    console.error('Error con gemini-1.5-flash, intentando modelo alternativo:', err.message);
+    try {
+      const genAI = new GoogleGenerativeAI(apiKey);
+      let model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+      let result = await model.generateContent(prompt);
+      let response = await result.response;
+      return response.text();
+    } catch (err2) {
+      console.error('Error al invocar Gemini API en todos los intentos:', err2.message);
+      return `[Error al conectar con la IA: ${err2.message}] Revisa tu código en la línea señalada. Recuerda que en Java las condiciones dentro de un 'if' deben evaluar un valor booleano (true o false) y no un número entero.`;
+    }
   }
 }
 
@@ -95,7 +101,7 @@ function construirInvocacionPruebas(nombreClase, testCodeRaw) {
         const params = Array.isArray(caso.entrada) 
           ? caso.entrada.map(p => typeof p === 'string' ? `"${p}"` : p).join(', ')
           : '';
-        return `System.out.println(${nombreClase}.verificar(${params}));`;
+        return `System.out.println(${nombreClase}.evaluar(${params}));`;
       }).join('\n            ');
     } catch (e) {
       // Si falla la conversión JSON, usar como llamada directa
