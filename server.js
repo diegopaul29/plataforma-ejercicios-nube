@@ -1,209 +1,225 @@
-import express from 'express';
-import cors from 'cors';
-import fs from 'fs';
-import path from 'path';
-import { exec } from 'child_process';
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import { pool } from './database.js';
+const express = require('express');
+const { exec } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+const db = require('./database');
 
 const app = express();
-app.use(cors());
+const PORT = process.env.PORT || 3000;
+
+// Configuración de Gemini API
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+
+// Middleware para procesar JSON y servir la carpeta estática del frontend
 app.use(express.json());
-app.use(express.static('public'));
+app.use(express.static(path.join(__dirname, 'public')));
 
-// Inicializar la API de Gemini
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+// Detectar automáticamente si existe OpenJDK local (Render) o del sistema
+const localJavac = path.join(__dirname, 'jdk-17', 'bin', 'javac');
+const localJava = path.join(__dirname, 'jdk-17', 'bin', 'java');
 
-// --------------------------------------------------------------------------
-// 1. Obtener la lista de los 30 ejercicios
-// --------------------------------------------------------------------------
-app.get('/api/ejercicios', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT id, titulo, dificultad FROM ejercicios ORDER BY id ASC;');
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).json({ error: 'Error al obtener los ejercicios' });
-  }
+const JAVAC_CMD = fs.existsSync(localJavac) ? `"${localJavac}"` : 'javac';
+const JAVA_CMD = fs.existsSync(localJava) ? `"${localJava}"` : 'java';
+
+// -------------------------------------------------------------
+// RUTAS DE LA API
+// -------------------------------------------------------------
+
+// 1. Obtener la lista completa de ejercicios
+app.get('/api/ejercicios', (req, res) => {
+  const query = 'SELECT id, titulo, dificultad, categoria FROM ejercicios ORDER BY id ASC';
+  db.all(query, [], (err, rows) => {
+    if (err) {
+      return res.status(500).json({ error: 'Error al consultar la base de datos' });
+    }
+    res.json(rows);
+  });
 });
 
-// --------------------------------------------------------------------------
-// 2. Obtener un ejercicio específico por ID
-// --------------------------------------------------------------------------
-app.get('/api/ejercicios/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const result = await pool.query('SELECT * FROM ejercicios WHERE id = $1;', [id]);
-    if (result.rows.length === 0) {
+// 2. Obtener un ejercicio específico por su ID
+app.get('/api/ejercicios/:id', (req, res) => {
+  const { id } = req.request ? req.request.params : req.params;
+  const query = 'SELECT * FROM ejercicios WHERE id = ?';
+  db.get(query, [id], (err, row) => {
+    if (err || !row) {
       return res.status(404).json({ error: 'Ejercicio no encontrado' });
     }
-    res.json(result.rows[0]);
-  } catch (err) {
-    res.status(500).json({ error: 'Error al obtener el ejercicio' });
-  }
+    res.json(row);
+  });
 });
 
-// --------------------------------------------------------------------------
-// 3. Evaluar el código Java del estudiante
-// --------------------------------------------------------------------------
-app.post('/api/evaluar', async (req, res) => {
+// 3. Evaluar el código enviado por el estudiante
+app.post('/api/evaluar', (req, res) => {
   const { ejercicioId, codigoAlumno } = req.body;
 
-  try {
-    // Buscar el ejercicio y sus casos de prueba en la base de datos
-    const dbRes = await pool.query('SELECT * FROM ejercicios WHERE id = $1;', [ejercicioId]);
-    if (dbRes.rows.length === 0) {
+  if (!ejercicioId || !codigoAlumno) {
+    return res.status(400).json({ error: 'Faltan datos requeridos (ejercicioId o codigoAlumno)' });
+  }
+
+  // Obtener el ejercicio de la base de datos para comparar pruebas
+  const query = 'SELECT * FROM ejercicios WHERE id = ?';
+  db.get(query, [ejercicioId], async (err, ejercicio) => {
+    if (err || !ejercicio) {
       return res.status(404).json({ error: 'Ejercicio no encontrado' });
     }
-    const ejercicio = dbRes.rows[0];
-    const casosPrueba = JSON.parse(ejercicio.casos_prueba);
 
-    // Preparar directorio temporal para la compilación de Java
-    const tempDir = path.join(process.cwd(), 'temp_' + Date.now());
-    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+    // Crear directorio temporal único para la compilación y ejecución
+    const tempDir = path.join(__dirname, `temp_${Date.now()}_${Math.random().toString(36).substring(7)}`);
+    fs.mkdirSync(tempDir, { recursive: true });
 
-    // Construir la clase Wrapper para ejecutar el método del alumno
-    const javaCode = `
-import java.util.*;
-
+    const javaFilePath = path.join(tempDir, 'Solucion.java');
+    
+    // Crear el código Java envolvente que invoca las pruebas
+    const codigoCompleto = `
 ${codigoAlumno}
 
 public class Main {
     public static void main(String[] args) {
-        if (args.length == 0) return;
-        
-        // El primer argumento determina qué caso de prueba se evalúa
-        int caso = Integer.parseInt(args[0]);
-        
         try {
-            switch(caso) {
-                ${casosPrueba.map((c, index) => {
-                  const argsFormatted = c.entrada.map(arg => typeof arg === 'string' ? `"${arg}"` : arg).join(', ');
-                  return `case ${index}:
-                            System.out.print(Solucion.evaluar(${argsFormatted}));
-                            break;`;
-                }).join('\n')}
-            }
+            ${ejercicio.codigo_prueba || ''}
         } catch (Exception e) {
-            System.err.print("Error de ejecucion: " + e.getMessage());
-            System.exit(1);
+            System.err.println("Excepción durante la ejecución: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 }
 `;
 
-    fs.writeFileSync(path.join(tempDir, 'Solucion.java'), codigoAlumno);
-    fs.writeFileSync(path.join(tempDir, 'Main.java'), javaCode);
+    fs.writeFileSync(javaFilePath, codigoCompleto);
 
-    // Compilar el código Java
-    exec(`javac ${path.join(tempDir, 'Main.java')} ${path.join(tempDir, 'Solucion.java')}`, async (compileErr, stdout, stderr) => {
+    // Compilar el archivo Java
+    const compileCmd = `${JAVAC_CMD} -d "${tempDir}" "${javaFilePath}"`;
+
+    exec(compileCmd, async (compileErr, stdoutComp, stderrComp) => {
       if (compileErr) {
         // Limpiar archivos temporales
-        fs.rmSync(tempDir, { recursive: true, force: true });
+        limpiarDirectorio(tempDir);
 
-        // Enviar error de compilación a Gemini
-        const feedback = await obtenerFeedbackIA(ejercicio, codigoAlumno, stderr, 'Error de Compilación (Sintaxis Java)');
-        return res.json({ exito: false, tipoError: 'compilacion', consola: stderr, feedbackIA: feedback });
-      }
+        const feedbackIA = await generarFeedbackIA(
+          ejercicio.titulo,
+          ejercicio.descripcion,
+          codigoAlumno,
+          stderrComp,
+          'Compilación'
+        );
 
-      // Probar los casos de prueba uno por uno
-      let pruebasExitosas = 0;
-      let detalleErrores = [];
-
-      for (let i = 0; i < casosPrueba.length; i++) {
-        const caso = casosPrueba[i];
-        
-        const salidaObtenida = await new Promise((resolve) => {
-          exec(`java -cp ${tempDir} Main ${i}`, (execErr, stdoutExec, stderrExec) => {
-            if (execErr) {
-              resolve({ error: stderrExec || execErr.message });
-            } else {
-              resolve({ resultado: stdoutExec.trim() });
-            }
-          });
-        });
-
-        if (salidaObtenida.error) {
-          detalleErrores.push(`Caso ${i + 1}: Error de ejecución -> ${salidaObtenida.error}`);
-          break;
-        } else if (String(salidaObtenida.resultado) === String(caso.salida)) {
-          pruebasExitosas++;
-        } else {
-          detalleErrores.push(`Caso ${i + 1}: Para entrada (${caso.entrada.join(', ')}), se esperaba "${caso.salida}" pero se obtuvo "${salidaObtenida.resultado}".`);
-          break;
-        }
-      }
-
-      // Limpiar directorio temporal después de probar
-      fs.rmSync(tempDir, { recursive: true, force: true });
-
-      // Verificar si pasó todas las pruebas
-      if (pruebasExitosas === casosPrueba.length) {
-        return res.json({
-          exito: true,
-          mensaje: '¡Excelente trabajo! Has superado todos los casos de prueba correctamente.'
-        });
-      } else {
-        const mensajeError = detalleErrores.join('\n');
-        const feedback = await obtenerFeedbackIA(ejercicio, codigoAlumno, mensajeError, 'Casos de prueba no superados');
         return res.json({
           exito: false,
-          tipoError: 'logica',
-          consola: mensajeError,
-          feedbackIA: feedback
+          tipoError: 'Error de Compilación',
+          consola: stderrComp || compileErr.message,
+          feedbackIA
         });
       }
-    });
 
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Error interno del servidor al evaluar el código' });
-  }
+      // Ejecutar el código compilado
+      const runCmd = `${JAVA_CMD} -cp "${tempDir}" Main`;
+
+      exec(runCmd, { timeout: 5000 }, async (runErr, stdoutRun, stderrRun) => {
+        // Limpiar archivos temporales
+        limpiarDirectorio(tempDir);
+
+        if (runErr) {
+          const mensajeError = stderrRun || runErr.message;
+          const feedbackIA = await generarFeedbackIA(
+            ejercicio.titulo,
+            ejercicio.descripcion,
+            codigoAlumno,
+            mensajeError,
+            'Ejecución'
+          );
+
+          return res.json({
+            exito: false,
+            tipoError: 'Error de Ejecución / Timeout',
+            consola: mensajeError,
+            feedbackIA
+          });
+        }
+
+        // Si la prueba imprime "OK" o coincide con la salida esperada
+        const salidaLimpia = stdoutRun.trim();
+        const salidaEsperada = (ejercicio.salida_esperada || '').trim();
+
+        if (salidaEsperada && !salidaLimpia.includes(salidaEsperada) && salidaLimpia !== 'OK') {
+          const feedbackIA = await generarFeedbackIA(
+            ejercicio.titulo,
+            ejercicio.descripcion,
+            codigoAlumno,
+            `Salida obtenida: "${salidaLimpia}". Se esperaba: "${salidaEsperada}"`,
+            'Lógica / Resultado Incorrecto'
+          );
+
+          return res.json({
+            exito: false,
+            tipoError: 'Resultado Incorrecto',
+            consola: `Salida recibida:\n${salidaLimpia}\n\nSalida esperada:\n${salidaEsperada}`,
+            feedbackIA
+          });
+        }
+
+        // Si todo pasa exitosamente
+        res.json({
+          exito: true,
+          mensaje: '¡Excelente! Tu solución ha pasado todas las pruebas correctamente.',
+          consola: salidaLimpia
+        });
+      });
+    });
+  });
 });
 
-// --------------------------------------------------------------------------
-// 4. Generación de retroalimentación pedagógica con Gemini
-// --------------------------------------------------------------------------
-async function obtenerFeedbackIA(ejercicio, codigoAlumno, errorObtenido, tipoFallo) {
+// Helper para limpiar carpetas temporales
+function limpiarDirectorio(dirPath) {
   try {
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    if (fs.existsSync(dirPath)) {
+      fs.rmSync(dirPath, { recursive: true, force: true });
+    }
+  } catch (e) {
+    console.error(`Error al borrar ${dirPath}:`, e.message);
+  }
+}
 
-    const prompt = `
-Eres un tutor universitario de programación interactivo y amable en un curso de Fundamentos de Programación en Java.
-Un estudiante intentó resolver el siguiente ejercicio:
+// Helper para consultar la API de Gemini
+async function generarFeedbackIA(titulo, descripcion, codigo, errorConsola, fase) {
+  if (!process.env.GEMINI_API_KEY) {
+    return 'Nota: Configura la variable GEMINI_API_KEY en Render para recibir explicaciones automáticas con Inteligencia Artificial.';
+  }
 
-**Ejercicio:** ${ejercicio.titulo}
-**Descripción:** ${ejercicio.descripcion}
-**Dificultad:** ${ejercicio.dificultad}
+  const prompt = `
+Eres un tutor de programación en Java pedagógico, claro y alentador.
+El estudiante está intentando resolver el siguiente ejercicio:
+- Título: ${titulo}
+- Descripción: ${descripcion}
 
-**Código escrito por el estudiante (Java):**
+El estudiante escribió este código:
 \`\`\`java
-${codigoAlumno}
+${codigo}
 \`\`\`
 
-**Tipo de problema detectado:** ${tipoFallo}
-**Detalle del error / salida del compilador:**
-${errorObtenido}
+Ocurrió un error en la fase de [${fase}]:
+\`\`\`
+${errorConsola}
+\`\`\`
 
-**Instrucciones para la respuesta:**
-1. Identifica la línea específica o bloque del código donde está el problema.
-2. Explica brevemente por qué ocurre el error según la sintaxis de Java o la lógica de las sentencias condicionales (if, if-else, if-else-if, switch).
-3. Dale una pista o sugerencia concreta sobre cómo corregirlo, pero **NO le des el código de la solución completa**. Guíalo para que descubra el error por sí mismo.
-4. Usa un tono motivador, conciso y cercano.
+Instrucciones:
+1. Explica qué significa el error de forma sencilla en 2 o 3 oraciones.
+2. Dale una pista concreta sobre cómo arreglarlo SIN darle la solución en código completa directamente.
+3. Mantén un tono motivador.
 `;
 
+  try {
     const result = await model.generateContent(prompt);
     const response = await result.response;
     return response.text();
   } catch (err) {
-    console.error('Error llamando a Gemini API:', err);
-    return 'No se pudo generar la retroalimentación automática en este momento. Revisa la sintaxis de tu código o la salida en consola.';
+    console.error('Error al invocar Gemini API:', err.message);
+    return 'No se pudo generar la sugerencia de la IA en este momento. Revisa el mensaje de la consola para más detalles.';
   }
 }
 
-// --------------------------------------------------------------------------
-// Iniciar el servidor
-// --------------------------------------------------------------------------
-const PORT = process.env.PORT || 3000;
+// Iniciar servidor Express
 app.listen(PORT, () => {
-  console.log(`Servidor de evaluación Java ejecutándose en el puerto ${PORT}`);
+  console.log(`Servidor ejecutándose en el puerto ${PORT}`);
 });

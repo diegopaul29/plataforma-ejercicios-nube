@@ -11,3 +11,6 @@ temp*/
 # Archivos del sistema
 .DS_Store
 Thumbs.db
+
+# Ignorar la carpeta de Java descargada localmente
+jdk-17/
