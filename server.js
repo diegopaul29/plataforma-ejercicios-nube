@@ -2,7 +2,6 @@ const express = require('express');
 const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
 const db = require('./database');
 
 const app = express();
@@ -30,63 +29,78 @@ function limpiarDirectorio(dirPath) {
   }
 }
 
-// Limpia únicamente las rutas internas del servidor Render para que la IA reciba un error limpio
+// Limpia las rutas internas del servidor Render (/opt/render/...) para mostrar sólo la línea y el error
 function limpiarRutasServidor(rawError) {
   if (!rawError) return '';
   return rawError.replace(/\/opt\/[^\s:]+\/Solucion\.java:/g, 'Línea ');
 }
 
-// Helper para consultar la API de Gemini
+// Helper para consultar la API de Gemini vía HTTP FETCH directo (Sin SDK)
 async function generarFeedbackIA(titulo, descripcion, codigo, errorConsola, fase) {
-  const apiKey = process.env.GEMINI_API_KEY || '';
+  const apiKey = (process.env.GEMINI_API_KEY || '').trim();
   const errorLimpio = limpiarRutasServidor(errorConsola);
 
   if (!apiKey) {
-    return 'Configura la variable GEMINI_API_KEY en Render para habilitar las pistas de Inteligencia Artificial.';
+    console.warn('GEMINI_API_KEY no encontrada en las variables de entorno.');
+    return 'Nota: Configura la variable GEMINI_API_KEY en Render para recibir explicaciones automáticas con IA.';
   }
 
-  const prompt = `
+  const promptText = `
 Eres un tutor pedagógico de programación en Java amigable y preciso.
-Un estudiante está intentando resolver el siguiente ejercicio:
+Un estudiante está resolviendo el siguiente ejercicio:
 
 Título: "${titulo}"
 Descripción: ${descripcion}
 
-Código escrito por el estudiante:
+Código del estudiante:
 \`\`\`java
 ${codigo}
 \`\`\`
 
-El compilador/ejecutor de Java devolvió el siguiente mensaje de error en la fase de [${fase}]:
+Mensaje de error exacto del compilador/ejecutor en la fase de [${fase}]:
 \`\`\`
 ${errorLimpio}
 \`\`\`
 
 Instrucciones:
-1. Analiza cuidadosamente el código del estudiante y el mensaje de error.
-2. Explica en español claro y sencillo (máximo 2 oraciones) por qué ocurre este error específico en la línea señalada (por ejemplo, si faltó el punto y coma, si falta un valor de retorno, si hay un símbolo mal ubicado, etc.).
-3. Proporciona una pista orientadora para corregir la línea sin darle la solución completa.
+1. Lee el código del estudiante y el error de compilación.
+2. Explica de forma concisa y sencilla (máximo 2 oraciones) QUÉ está mal en la línea señalada (por ejemplo: falta un punto y coma, falta indicar un valor de retorno, la sintaxis del return está incompleta, etc.).
+3. Proporciona una pista clara para corregirlo SIN darle el código completo resuelto.
 4. Mantén un tono alentador.
 `;
 
-  const modelosAProbar = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro'];
-  const genAI = new GoogleGenerativeAI(apiKey);
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [{ text: promptText }]
+          }
+        ]
+      })
+    });
 
-  for (const nombreModelo of modelosAProbar) {
-    try {
-      const model = genAI.getGenerativeModel({ model: nombreModelo });
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      const texto = response.text();
-      if (texto && texto.trim().length > 0) {
-        return texto;
-      }
-    } catch (err) {
-      console.error(`Error consultando modelo ${nombreModelo}:`, err.message);
+    const data = await response.json();
+
+    if (!response.ok) {
+      console.error('Error devuelto por la API de Google Gemini:', JSON.stringify(data));
+      return `Error en la API de Google (${response.status}): ${data.error?.message || 'Verifica la clave GEMINI_API_KEY en Render.'}`;
     }
-  }
 
-  return `[No se pudo conectar con la IA de Gemini: Revisa que la GEMINI_API_KEY en Render sea válida]. Detalle del error de compilación: ${errorLimpio}`;
+    const respuestaTexto = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (respuestaTexto) {
+      return respuestaTexto;
+    }
+
+    return 'No se obtuvo respuesta del modelo. Revisa el mensaje en la consola de Java.';
+  } catch (err) {
+    console.error('Error al realizar la petición HTTP a Gemini:', err.message);
+    return `Ocurrió un error al conectar con la IA (${err.message}). Revisa el mensaje de compilación en la consola.`;
+  }
 }
 
 // Helper para formatear casos de prueba
