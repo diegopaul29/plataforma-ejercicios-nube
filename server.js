@@ -69,14 +69,17 @@ Instrucciones:
 4. Mantén un tono alentador.
 `;
 
-  // Modelos activos y soportados en la API REST v1beta
-  const modelos = ['gemini-2.5-flash', 'gemini-flash'];
+  // Probamos combinaciones con la API v1 y v1beta con nombres de modelos canónicos estables
+  const endpoints = [
+    `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+    `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-pro:generateContent?key=${apiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`
+  ];
+
   let ultimoErrorGoogle = '';
 
-  for (const modelo of modelos) {
+  for (const url of endpoints) {
     try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent?key=${apiKey}`;
-      
       const response = await fetch(url, {
         method: 'POST',
         headers: { 
@@ -100,11 +103,11 @@ Instrucciones:
           return respuestaTexto;
         }
       } else {
-        console.error(`[Gemini API Log] Error con ${modelo} (${response.status}):`, JSON.stringify(data));
+        console.error(`[Gemini API Log] Error en ${url} (${response.status}):`, JSON.stringify(data));
         ultimoErrorGoogle = `(${response.status}): ${data.error?.message || 'Error de API'}`;
       }
     } catch (err) {
-      console.error(`[Gemini API Log] Error de conexión con ${modelo}:`, err.message);
+      console.error(`[Gemini API Log] Error de conexión:`, err.message);
       ultimoErrorGoogle = err.message;
     }
   }
