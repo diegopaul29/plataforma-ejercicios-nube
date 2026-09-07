@@ -30,9 +30,27 @@ function limpiarDirectorio(dirPath) {
   }
 }
 
+// Helper para sanitizar y limpiar los mensajes de error feos/largos del compilador Java
+function limpiarErrorConsola(rawError) {
+  if (!rawError) return '';
+  return rawError
+    // Elimina rutas completas del sistema Linux/Render (ej. /opt/render/project/src/temp_.../Solucion.java:5:)
+    .replace(/\/opt\/[^\s:]+\.java:\d+:\s*/g, '')
+    // Elimina la palabra "error:" en inglés
+    .replace(/error:\s*/gi, '')
+    // Elimina el conteo final tipo "1 error" o "2 errors"
+    .replace(/\d+\s+errors?/gi, '')
+    // Elimina símbolos de puntero del compilador (^)
+    .replace(/\^\s*/g, '')
+    // Limpia saltos de línea excesivos
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 // Helper para consultar la API de Gemini con rotación de nombres de modelo válidos
 async function generarFeedbackIA(titulo, descripcion, codigo, errorConsola, fase) {
   const apiKey = process.env.GEMINI_API_KEY || '';
+  const errorLimpio = limpiarErrorConsola(errorConsola);
 
   if (!apiKey) {
     console.warn('GEMINI_API_KEY no se encuentra configurada en las variables de entorno.');
@@ -50,19 +68,19 @@ ${codigo}
 
 Mensaje de error (${fase}):
 \`\`\`
-${errorConsola}
+${errorLimpio}
 \`\`\`
 
 Instrucciones para la respuesta:
-1. Explica brevemente el error de compilación o ejecución de manera sencilla (máximo 2 oraciones).
-2. Si el error es "incompatible types: int cannot be converted to boolean", aclárale que Java requiere que la condición dentro de la sentencia 'if' evalúe un valor booleano (true/false) utilizando operadores de comparación (como '>', '<', '=='), y no un número entero directo.
-3. Dale una pista concreta sobre la línea del error para corregirlo.
+1. Explica de forma concisa y amigable en 1 o 2 oraciones qué salió mal, NUNCA muestres rutas de carpetas ni códigos de error en inglés completos.
+2. Si el error es sobre tipos incompatibles ("incompatible types"), aclárale sencillamente que Java exige que la condición dentro de la sentencia 'if' evalúe un valor booleano (true/false) mediante una comparación (como 'num > 0'), y no un entero directamente.
+3. Dale una pista concreta sobre la línea para corregirlo.
 4. NO le des el código resuelto completo.
 5. Mantén un tono motivador.
 `;
 
   // Lista de modelos activos a probar secuencialmente
-  const modelosProbar = ['gemini-3.6-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+  const modelosProbar = ['gemini-1.5-flash', 'gemini-2.0-flash'];
   const genAI = new GoogleGenerativeAI(apiKey);
 
   for (const nombreModelo of modelosProbar) {
@@ -79,8 +97,8 @@ Instrucciones para la respuesta:
     }
   }
 
-  // Fallback explicativo directo en caso de fallar la llamada de API
-  return `Análisis técnico: El error "${errorConsola}" ocurre porque en Java la sentencia 'if' exige una expresión booleana (evaluada en true o false, por ejemplo 'num > 0'). Pasar un valor entero directamente como 'if (num)' no es válido. Revisa la condición en la línea indicada.`;
+  // Fallback explicativo limpio y sin rutas en caso de fallar la llamada de API
+  return `El error ocurre porque en Java la sentencia 'if' exige una expresión booleana (que evalúe a true o false, por ejemplo 'num > 0'). Pasar un valor entero directamente como 'if (num)' no es válido. Revisa la condición en tu código.`;
 }
 
 // Helper para formatear casos de prueba (ya sean texto Java o JSON)
