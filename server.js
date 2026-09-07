@@ -9,8 +9,8 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Configuración de Gemini API
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
-const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+const apiKey = process.env.GEMINI_API_KEY || '';
+const genAI = new GoogleGenerativeAI(apiKey);
 
 // Middleware para procesar JSON y servir archivos estáticos del frontend
 app.use(express.json());
@@ -36,17 +36,15 @@ function limpiarDirectorio(dirPath) {
 
 // Helper para consultar la API de Gemini
 async function generarFeedbackIA(titulo, descripcion, codigo, errorConsola, fase) {
-  if (!process.env.GEMINI_API_KEY) {
+  if (!apiKey) {
     return 'Nota: Configura la variable GEMINI_API_KEY en Render para recibir explicaciones automáticas con Inteligencia Artificial.';
   }
 
   const prompt = `
-Eres un tutor de programación en Java pedagógico, claro y alentador.
-El estudiante está intentando resolver el siguiente ejercicio:
-- Título: ${titulo}
-- Descripción: ${descripcion}
+Eres un tutor pedagógico de Java.
+El estudiante resolvió el ejercicio "${titulo}": ${descripcion}
 
-El estudiante escribió este código:
+Código del estudiante:
 \`\`\`java
 ${codigo}
 \`\`\`
@@ -57,19 +55,48 @@ ${errorConsola}
 \`\`\`
 
 Instrucciones:
-1. Explica qué significa el error de forma sencilla en 2 o 3 oraciones.
-2. Dale una pista concreta sobre cómo arreglarlo SIN darle la solución en código completa directamente.
-3. Mantén un tono motivador.
+1. Explica qué significa el error de forma sencilla en 2 oraciones.
+2. Dale una pista concreta sobre cómo arreglarlo (por ejemplo, faltan puntos y coma ';', llaves, o diferencias en la salida) SIN darle la solución completa.
+3. Sé motivador.
 `;
 
   try {
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
     const result = await model.generateContent(prompt);
     const response = await result.response;
     return response.text();
   } catch (err) {
     console.error('Error al invocar Gemini API:', err.message);
-    return 'No se pudo generar la sugerencia de la IA en este momento. Revisa el mensaje de la consola para más detalles.';
+    return 'Revisa la sintaxis de tu código Java. Asegúrate de cerrar todas las sentencias con ";" y verificar los métodos solicitados.';
   }
+}
+
+// Helper para formatear casos de prueba (ya sean texto Java o JSON)
+function construirInvocacionPruebas(nombreClase, testCodeRaw) {
+  if (!testCodeRaw) {
+    return `${nombreClase}.main(new String[]{});`;
+  }
+
+  const testTrim = testCodeRaw.trim();
+
+  // Si es una cadena de prueba en formato JSON
+  if (testTrim.startsWith('[') || testTrim.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(testTrim);
+      const listaCasos = Array.isArray(parsed) ? parsed : [parsed];
+      
+      return listaCasos.map(caso => {
+        const params = Array.isArray(caso.entrada) 
+          ? caso.entrada.map(p => typeof p === 'string' ? `"${p}"` : p).join(', ')
+          : '';
+        return `System.out.println(${nombreClase}.verificar(${params}));`;
+      }).join('\n            ');
+    } catch (e) {
+      // Si falla la conversión JSON, usar como llamada directa
+    }
+  }
+
+  return testCodeRaw;
 }
 
 // -------------------------------------------------------------
@@ -118,24 +145,33 @@ app.post('/api/evaluar', (req, res) => {
       return res.status(404).json({ error: 'Ejercicio no encontrado' });
     }
 
-    // Crear carpeta temporal única para la compilación y ejecución
     const tempDir = path.join(__dirname, `temp_${Date.now()}_${Math.floor(Math.random() * 1000)}`);
 
     try {
       fs.mkdirSync(tempDir, { recursive: true });
 
-      // Validar campos de prueba de la base de datos con respaldos seguros
-      const testCode = ejercicio.codigo_prueba || ejercicio.casos_prueba || '';
+      // Detectar nombre de la clase pública del alumno (ej. "public class Solucion" -> "Solucion")
+      const matchClase = codigoAlumno.match(/public\s+class\s+([A-Za-z0-9_]+)/);
+      const nombreClaseAlumno = matchClase ? matchClase[1] : 'Solucion';
+
+      // Normalizar el código si no tiene declaración de clase
+      let codigoJavaAlumno = codigoAlumno;
+      if (!matchClase) {
+        codigoJavaAlumno = `public class ${nombreClaseAlumno} {\n${codigoAlumno}\n}`;
+      }
+
+      const testCodeRaw = ejercicio.codigo_prueba || ejercicio.casos_prueba || '';
+      const invocacionPruebas = construirInvocacionPruebas(nombreClaseAlumno, testCodeRaw);
       const expectedOutput = (ejercicio.salida_esperada || '').trim();
 
-      // Generar el código Java completo envolvente
+      // Construcción del archivo principal envolvente
       const codigoCompleto = `
-${codigoAlumno}
+${codigoJavaAlumno}
 
-public class Main {
+class MainRunner {
     public static void main(String[] args) {
         try {
-            ${testCode}
+            ${invocacionPruebas}
         } catch (Exception e) {
             System.err.println("Excepción durante la ejecución: " + e.getMessage());
         }
@@ -143,57 +179,48 @@ public class Main {
 }
 `;
 
-      const javaFilePath = path.join(tempDir, 'Solucion.java');
+      const javaFilePath = path.join(tempDir, `${nombreClaseAlumno}.java`);
       fs.writeFileSync(javaFilePath, codigoCompleto);
 
-      // Compilar el archivo Java
+      // Compilación
       const compileCmd = `${JAVAC_CMD} -d "${tempDir}" "${javaFilePath}"`;
 
       exec(compileCmd, async (compileErr, stdoutComp, stderrComp) => {
         if (compileErr) {
           limpiarDirectorio(tempDir);
-
-          let feedbackIA = 'No se pudo generar retroalimentación de la IA.';
-          try {
-            feedbackIA = await generarFeedbackIA(
-              ejercicio.titulo || 'Ejercicio Java',
-              ejercicio.descripcion || '',
-              codigoAlumno,
-              stderrComp || compileErr.message,
-              'Compilación'
-            );
-          } catch (e) {
-            console.error('Error invocando IA:', e.message);
-          }
+          const errorMsg = stderrComp || compileErr.message;
+          
+          const feedbackIA = await generarFeedbackIA(
+            ejercicio.titulo || 'Ejercicio Java',
+            ejercicio.descripcion || '',
+            codigoAlumno,
+            errorMsg,
+            'Compilación'
+          );
 
           return res.json({
             exito: false,
             tipoError: 'Error de Compilación',
-            consola: stderrComp || compileErr.message,
+            consola: errorMsg,
             feedbackIA
           });
         }
 
-        // Ejecutar el código compilado
-        const runCmd = `${JAVA_CMD} -cp "${tempDir}" Main`;
+        // Ejecución
+        const runCmd = `${JAVA_CMD} -cp "${tempDir}" MainRunner`;
 
         exec(runCmd, { timeout: 5000 }, async (runErr, stdoutRun, stderrRun) => {
           limpiarDirectorio(tempDir);
 
           if (runErr) {
             const errorMsg = stderrRun || runErr.message;
-            let feedbackIA = 'No se pudo generar retroalimentación de la IA.';
-            try {
-              feedbackIA = await generarFeedbackIA(
-                ejercicio.titulo || 'Ejercicio Java',
-                ejercicio.descripcion || '',
-                codigoAlumno,
-                errorMsg,
-                'Ejecución'
-              );
-            } catch (e) {
-              console.error('Error invocando IA:', e.message);
-            }
+            const feedbackIA = await generarFeedbackIA(
+              ejercicio.titulo || 'Ejercicio Java',
+              ejercicio.descripcion || '',
+              codigoAlumno,
+              errorMsg,
+              'Ejecución'
+            );
 
             return res.json({
               exito: false,
@@ -203,22 +230,17 @@ public class Main {
             });
           }
 
-          // Validar salida obtenida
           const salidaLimpia = stdoutRun.trim();
 
+          // Validación de salida esperada
           if (expectedOutput && !salidaLimpia.includes(expectedOutput) && salidaLimpia !== 'OK') {
-            let feedbackIA = 'No se pudo generar retroalimentación de la IA.';
-            try {
-              feedbackIA = await generarFeedbackIA(
-                ejercicio.titulo || 'Ejercicio Java',
-                ejercicio.descripcion || '',
-                codigoAlumno,
-                `Salida obtenida: "${salidaLimpia}". Se esperaba: "${expectedOutput}"`,
-                'Lógica / Resultado Incorrecto'
-              );
-            } catch (e) {
-              console.error('Error invocando IA:', e.message);
-            }
+            const feedbackIA = await generarFeedbackIA(
+              ejercicio.titulo || 'Ejercicio Java',
+              ejercicio.descripcion || '',
+              codigoAlumno,
+              `Salida obtenida: "${salidaLimpia}". Se esperaba: "${expectedOutput}"`,
+              'Resultado Incorrecto'
+            );
 
             return res.json({
               exito: false,
@@ -228,7 +250,7 @@ public class Main {
             });
           }
 
-          // Prueba exitosa
+          // Respuesta Exitosa
           return res.json({
             exito: true,
             mensaje: '¡Excelente! Tu solución ha pasado todas las pruebas correctamente.',
