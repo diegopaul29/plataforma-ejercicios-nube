@@ -8,10 +8,6 @@ const db = require('./database');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Configuración de Gemini API
-const apiKey = process.env.GEMINI_API_KEY || '';
-const genAI = new GoogleGenerativeAI(apiKey);
-
 // Middleware para procesar JSON y servir archivos estáticos del frontend
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -34,40 +30,50 @@ function limpiarDirectorio(dirPath) {
   }
 }
 
-// Helper para consultar la API de Gemini
+// Helper para consultar la API de Gemini con manejo dinámico y detallado
 async function generarFeedbackIA(titulo, descripcion, codigo, errorConsola, fase) {
-  if (!apiKey) {
+  const currentApiKey = process.env.GEMINI_API_KEY || '';
+
+  if (!currentApiKey) {
+    console.warn('GEMINI_API_KEY no está configurada en las variables de entorno.');
     return 'Nota: Configura la variable GEMINI_API_KEY en Render para recibir explicaciones automáticas con Inteligencia Artificial.';
   }
 
   const prompt = `
-Eres un tutor pedagógico de Java.
-El estudiante resolvió el ejercicio "${titulo}": ${descripcion}
+Eres un tutor pedagógico de Java amigable, claro y alentador.
+Un estudiante envió un código que generó un error en la fase de [${fase}].
+
+Ejercicio: "${titulo}"
+Descripción del ejercicio: ${descripcion}
 
 Código del estudiante:
 \`\`\`java
 ${codigo}
 \`\`\`
 
-Ocurrió un error en la fase de [${fase}]:
+Mensaje de error exacto del compilador (javac) / ejecución:
 \`\`\`
 ${errorConsola}
 \`\`\`
 
-Instrucciones:
-1. Explica qué significa el error de forma sencilla en 2 oraciones.
-2. Dale una pista concreta sobre cómo arreglarlo (por ejemplo, faltan puntos y coma ';', llaves, o diferencias en la salida) SIN darle la solución completa.
-3. Sé motivador.
+Instrucciones para tu respuesta:
+1. Revisa la línea del código que señala el compilador.
+2. Explica de forma sencilla en 2 oraciones qué significa el error técnico (por ejemplo, si usó una condición numérica en un 'if' que requiere booleano, o si falta un tipo de retorno).
+3. Proporciona una pista concreta orientada a la línea afectada para corregirlo, SIN darle el código con la solución completa.
+4. Mantén un tono motivador.
 `;
 
   try {
+    const genAI = new GoogleGenerativeAI(currentApiKey);
     const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
     const result = await model.generateContent(prompt);
     const response = await result.response;
-    return response.text();
+    const text = response.text();
+    if (text) return text;
+    return 'No se pudo generar la sugerencia de la IA en este momento. Revisa el mensaje de la consola para más detalles.';
   } catch (err) {
-    console.error('Error al invocar Gemini API:', err.message);
-    return 'Revisa la sintaxis de tu código Java. Asegúrate de cerrar todas las sentencias con ";" y verificar los métodos solicitados.';
+    console.error('Error detallado al invocar Gemini API:', err);
+    return `Ocurrió un inconveniente al consultar a la IA (${err.message}). Revisa el mensaje de error de la consola de Java.`;
   }
 }
 
