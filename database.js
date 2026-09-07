@@ -10,18 +10,38 @@ const pool = new Pool({
 
 module.exports = {
   all: (text, params, callback) => {
-    pool.query(text, params, (err, res) => {
-      if (err) return callback(err, null);
+    if (typeof params === 'function') {
+      callback = params;
+      params = [];
+    }
+
+    let paramIndex = 1;
+    const pgQuery = text.replace(/\?/g, () => `$${paramIndex++}`);
+
+    pool.query(pgQuery, params, (err, res) => {
+      if (err) {
+        console.error('Error en consulta SQL (all):', err.message);
+        return callback(err, null);
+      }
       callback(null, res.rows);
     });
   },
+
   get: (text, params, callback) => {
-    pool.query(text, params, (err, res) => {
-      if (err) return callback(err, null);
+    if (typeof params === 'function') {
+      callback = params;
+      params = [];
+    }
+
+    let paramIndex = 1;
+    const pgQuery = text.replace(/\?/g, () => `$${paramIndex++}`);
+
+    pool.query(pgQuery, params, (err, res) => {
+      if (err) {
+        console.error('Error en consulta SQL (get):', err.message);
+        return callback(err, null);
+      }
       callback(null, res.rows[0]);
     });
-  },
-  query: (text, params, callback) => {
-    return pool.query(text, params, callback);
   }
 };
