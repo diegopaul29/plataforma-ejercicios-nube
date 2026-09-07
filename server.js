@@ -30,78 +30,66 @@ function limpiarDirectorio(dirPath) {
   }
 }
 
-// Helper para sanitizar y limpiar los mensajes de error feos/largos del compilador Java
-function limpiarErrorConsola(rawError) {
+// Limpia únicamente las rutas internas del servidor Render para que la IA reciba un error limpio
+function limpiarRutasServidor(rawError) {
   if (!rawError) return '';
-  return rawError
-    // Elimina rutas completas del sistema Linux/Render (ej. /opt/render/project/src/temp_.../Solucion.java:5:)
-    .replace(/\/opt\/[^\s:]+\.java:\d+:\s*/g, '')
-    // Elimina la palabra "error:" en inglés
-    .replace(/error:\s*/gi, '')
-    // Elimina el conteo final tipo "1 error" o "2 errors"
-    .replace(/\d+\s+errors?/gi, '')
-    // Elimina símbolos de puntero del compilador (^)
-    .replace(/\^\s*/g, '')
-    // Limpia saltos de línea excesivos
-    .replace(/\s+/g, ' ')
-    .trim();
+  return rawError.replace(/\/opt\/[^\s:]+\/Solucion\.java:/g, 'Línea ');
 }
 
-// Helper para consultar la API de Gemini con rotación de nombres de modelo válidos
+// Helper para consultar la API de Gemini
 async function generarFeedbackIA(titulo, descripcion, codigo, errorConsola, fase) {
   const apiKey = process.env.GEMINI_API_KEY || '';
-  const errorLimpio = limpiarErrorConsola(errorConsola);
+  const errorLimpio = limpiarRutasServidor(errorConsola);
 
   if (!apiKey) {
-    console.warn('GEMINI_API_KEY no se encuentra configurada en las variables de entorno.');
-    return 'Nota: Configura la variable GEMINI_API_KEY en Render para recibir explicaciones automáticas con Inteligencia Artificial.';
+    return 'Configura la variable GEMINI_API_KEY en Render para habilitar las pistas de Inteligencia Artificial.';
   }
 
   const prompt = `
-Eres un tutor pedagógico de Java amigable y didáctico.
-Un estudiante envió una solución para el ejercicio "${titulo}": ${descripcion}
+Eres un tutor pedagógico de programación en Java amigable y preciso.
+Un estudiante está intentando resolver el siguiente ejercicio:
 
-Código del estudiante:
+Título: "${titulo}"
+Descripción: ${descripcion}
+
+Código escrito por el estudiante:
 \`\`\`java
 ${codigo}
 \`\`\`
 
-Mensaje de error (${fase}):
+El compilador/ejecutor de Java devolvió el siguiente mensaje de error en la fase de [${fase}]:
 \`\`\`
 ${errorLimpio}
 \`\`\`
 
-Instrucciones para la respuesta:
-1. Explica de forma concisa y amigable en 1 o 2 oraciones qué salió mal, NUNCA muestres rutas de carpetas ni códigos de error en inglés completos.
-2. Si el error es sobre tipos incompatibles ("incompatible types"), aclárale sencillamente que Java exige que la condición dentro de la sentencia 'if' evalúe un valor booleano (true/false) mediante una comparación (como 'num > 0'), y no un entero directamente.
-3. Dale una pista concreta sobre la línea para corregirlo.
-4. NO le des el código resuelto completo.
-5. Mantén un tono motivador.
+Instrucciones:
+1. Analiza cuidadosamente el código del estudiante y el mensaje de error.
+2. Explica en español claro y sencillo (máximo 2 oraciones) por qué ocurre este error específico en la línea señalada (por ejemplo, si faltó el punto y coma, si falta un valor de retorno, si hay un símbolo mal ubicado, etc.).
+3. Proporciona una pista orientadora para corregir la línea sin darle la solución completa.
+4. Mantén un tono alentador.
 `;
 
-  // Lista de modelos activos a probar secuencialmente
-  const modelosProbar = ['gemini-1.5-flash', 'gemini-2.0-flash'];
+  const modelosAProbar = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro'];
   const genAI = new GoogleGenerativeAI(apiKey);
 
-  for (const nombreModelo of modelosProbar) {
+  for (const nombreModelo of modelosAProbar) {
     try {
       const model = genAI.getGenerativeModel({ model: nombreModelo });
       const result = await model.generateContent(prompt);
       const response = await result.response;
       const texto = response.text();
-      if (texto) {
+      if (texto && texto.trim().length > 0) {
         return texto;
       }
     } catch (err) {
-      console.error(`Inconveniente con modelo ${nombreModelo}:`, err.message);
+      console.error(`Error consultando modelo ${nombreModelo}:`, err.message);
     }
   }
 
-  // Fallback explicativo limpio y sin rutas en caso de fallar la llamada de API
-  return `El error ocurre porque en Java la sentencia 'if' exige una expresión booleana (que evalúe a true o false, por ejemplo 'num > 0'). Pasar un valor entero directamente como 'if (num)' no es válido. Revisa la condición en tu código.`;
+  return `[No se pudo conectar con la IA de Gemini: Revisa que la GEMINI_API_KEY en Render sea válida]. Detalle del error de compilación: ${errorLimpio}`;
 }
 
-// Helper para formatear casos de prueba (ya sean texto Java o JSON)
+// Helper para formatear casos de prueba
 function construirInvocacionPruebas(nombreClase, testCodeRaw) {
   if (!testCodeRaw) {
     return `${nombreClase}.main(new String[]{});`;
@@ -109,7 +97,6 @@ function construirInvocacionPruebas(nombreClase, testCodeRaw) {
 
   const testTrim = testCodeRaw.trim();
 
-  // Si es una cadena de prueba en formato JSON
   if (testTrim.startsWith('[') || testTrim.startsWith('{')) {
     try {
       const parsed = JSON.parse(testTrim);
@@ -180,11 +167,9 @@ app.post('/api/evaluar', (req, res) => {
     try {
       fs.mkdirSync(tempDir, { recursive: true });
 
-      // Detectar nombre de la clase pública del alumno (ej. "public class Solucion" -> "Solucion")
       const matchClase = codigoAlumno.match(/public\s+class\s+([A-Za-z0-9_]+)/);
       const nombreClaseAlumno = matchClase ? matchClase[1] : 'Solucion';
 
-      // Normalizar el código si no tiene declaración de clase
       let codigoJavaAlumno = codigoAlumno;
       if (!matchClase) {
         codigoJavaAlumno = `public class ${nombreClaseAlumno} {\n${codigoAlumno}\n}`;
@@ -194,7 +179,6 @@ app.post('/api/evaluar', (req, res) => {
       const invocacionPruebas = construirInvocacionPruebas(nombreClaseAlumno, testCodeRaw);
       const expectedOutput = (ejercicio.salida_esperada || '').trim();
 
-      // Construcción del archivo principal envolvente
       const codigoCompleto = `
 ${codigoJavaAlumno}
 
@@ -231,7 +215,7 @@ class MainRunner {
           return res.json({
             exito: false,
             tipoError: 'Error de Compilación',
-            consola: errorMsg,
+            consola: limpiarRutasServidor(errorMsg),
             feedbackIA
           });
         }
@@ -255,7 +239,7 @@ class MainRunner {
             return res.json({
               exito: false,
               tipoError: 'Error de Ejecución',
-              consola: errorMsg,
+              consola: limpiarRutasServidor(errorMsg),
               feedbackIA
             });
           }
