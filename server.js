@@ -35,7 +35,7 @@ function limpiarRutasServidor(rawError) {
   return rawError.replace(/\/opt\/[^\s:]+\/Solucion\.java:/g, 'Línea ');
 }
 
-// Helper para consultar la API de Gemini vía HTTP FETCH directo (Sin SDK)
+// Helper para consultar la API de Gemini vía HTTP FETCH directo (Soporta claves AQ.Ab8... y AIzaSy...)
 async function generarFeedbackIA(titulo, descripcion, codigo, errorConsola, fase) {
   const apiKey = (process.env.GEMINI_API_KEY || '').trim();
   const errorLimpio = limpiarRutasServidor(errorConsola);
@@ -64,13 +64,14 @@ ${errorLimpio}
 
 Instrucciones:
 1. Lee el código del estudiante y el error de compilación.
-2. Explica de forma concisa y sencilla (máximo 2 oraciones) QUÉ está mal en la línea señalada (por ejemplo: falta un punto y coma, falta indicar un valor de retorno, la sintaxis del return está incompleta, etc.).
+2. Explica de forma concisa y sencilla (máximo 2 oraciones) QUÉ está mal en la línea señalada.
 3. Proporciona una pista clara para corregirlo SIN darle el código completo resuelto.
 4. Mantén un tono alentador.
 `;
 
-  // Modelos a probar en orden de disponibilidad
-  const modelos = ['gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-1.5-flash-latest'];
+  // Modelos compatibles con la API REST v1beta
+  const modelos = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.5-flash'];
+  let ultimoErrorGoogle = '';
 
   for (const modelo of modelos) {
     try {
@@ -78,7 +79,10 @@ Instrucciones:
       
       const response = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-goog-api-key': apiKey // Envío seguro en header para nuevos formatos de claves
+        },
         body: JSON.stringify({
           contents: [
             {
@@ -96,14 +100,16 @@ Instrucciones:
           return respuestaTexto;
         }
       } else {
-        console.warn(`Error con modelo ${modelo} (${response.status}):`, data.error?.message);
+        console.error(`[Gemini API Log] Error con ${modelo} (${response.status}):`, JSON.stringify(data));
+        ultimoErrorGoogle = `(${response.status}): ${data.error?.message || 'Error de permisos'}`;
       }
     } catch (err) {
-      console.error(`Error de red intentando conectar con ${modelo}:`, err.message);
+      console.error(`[Gemini API Log] Error de conexión con ${modelo}:`, err.message);
+      ultimoErrorGoogle = err.message;
     }
   }
 
-  return 'No se pudo obtener feedback de la IA. Por favor verifica la clave GEMINI_API_KEY en Render.';
+  return `No se pudo conectar con la IA. Detalle: ${ultimoErrorGoogle}`;
 }
 
 // Helper para formatear casos de prueba
