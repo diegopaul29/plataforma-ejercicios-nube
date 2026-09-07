@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Plataforma de Ejercicios Condicionales</title>
+  <style>
+    body { font-family: sans-serif; margin: 0; display: flex; height: 100vh; background-color: #1e1e1e; color: #fff; }
+    #sidebar { width: 300px; background: #252526; padding: 15px; overflow-y: auto; border-right: 1px solid #333; }
+    #main { flex: 1; display: flex; flex-direction: column; padding: 20px; }
+    .item-ejercicio { padding: 10px; cursor: pointer; border-bottom: 1px solid #333; }
+    .item-ejercicio:hover { background: #37373d; }
+    #editor-container { height: 350px; border: 1px solid #444; margin: 15px 0; }
+    button { background: #0e639c; color: white; border: none; padding: 10px 20px; cursor: pointer; font-size: 16px; border-radius: 4px; }
+    button:hover { background: #1177bb; }
+    #resultado { margin-top: 15px; padding: 15px; border-radius: 4px; white-space: pre-wrap; }
+    .exito { background: #1e4620; border: 1px solid #2e7d32; }
+    .error { background: #5a1d1d; border: 1px solid #d32f2f; }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.36.1/min/vs/loader.min.js"></script>
+</head>
+<body>
+  <div id="sidebar">
+    <h2>30 Ejercicios</h2>
+    <div id="lista-ejercicios">Cargando...</div>
+  </div>
+  <div id="main">
+    <h2 id="titulo">Selecciona un ejercicio</h2>
+    <p id="descripcion"></p>
+    <div id="editor-container"></div>
+    <button onclick="ejecutarCodigo()">Ejecutar Código</button>
+    <div id="resultado"></div>
+  </div>
+  <script>
+    let editor;
+    let ejercicioActualId = null;
+
+    require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.36.1/min/vs' } });
+    require(['vs/editor/editor.main'], function () {
+      editor = monaco.editor.create(document.getElementById('editor-container'), {
+        value: '// Selecciona un ejercicio para empezar',
+        language: 'javascript',
+        theme: 'vs-dark',
+        automaticLayout: true
+      });
+    });
+
+    async function cargarLista() {
+      const res = await fetch('/api/ejercicios');
+      const data = await res.json();
+      const cont = document.getElementById('lista-ejercicios');
+      cont.innerHTML = '';
+      data.forEach(ej => {
+        const div = document.createElement('div');
+        div.className = 'item-ejercicio';
+        div.innerText = `${ej.titulo} [${ej.dificultad}]`;
+        div.onclick = () => cargarEjercicio(ej.id);
+        cont.appendChild(div);
+      });
+    }
+
+    async function cargarEjercicio(id) {
+      ejercicioActualId = id;
+      const res = await fetch(`/api/ejercicios/${id}`);
+      const ej = await res.json();
+      document.getElementById('titulo').innerText = ej.titulo;
+      document.getElementById('descripcion').innerText = ej.descripcion;
+      editor.setValue(ej.plantilla_codigo);
+      document.getElementById('resultado').innerText = '';
+      document.getElementById('resultado').className = '';
+    }
+
+    async function ejecutarCodigo() {
+      if (!ejercicioActualId) return alert('Selecciona un ejercicio primero.');
+      const resultadoDiv = document.getElementById('resultado');
+      resultadoDiv.innerText = 'Ejecutando y analizando con IA...';
+      resultadoDiv.className = '';
+
+      const res = await fetch('/api/ejecutar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ejercicioId: ejercicioActualId,
+          codigoUsuario: editor.getValue()
+        })
+      });
+
+      const data = await res.json();
+      if (data.exito) {
+        resultadoDiv.innerText = data.mensaje;
+        resultadoDiv.className = 'exito';
+      } else {
+        resultadoDiv.innerText = " Diagnóstico de la IA:\n\n" + data.diagnosticoIA;
+        resultadoDiv.className = 'error';
+      }
+    }
+
+    cargarLista();
+  </script>
+</body>
+</html>

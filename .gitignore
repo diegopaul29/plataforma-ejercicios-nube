@@ -1,0 +1,13 @@
+# Dependencias de Node.js
+node_modules/
+
+# Archivos de variables de entorno y llaves secretas
+.env
+
+# Carpetas y archivos temporales de compilación de Java
+temp*/
+*.class
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db
