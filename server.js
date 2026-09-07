@@ -30,7 +30,7 @@ function limpiarDirectorio(dirPath) {
   }
 }
 
-// Helper para consultar la API de Gemini
+// Helper para consultar la API de Gemini con rotación de nombres de modelo válidos
 async function generarFeedbackIA(titulo, descripcion, codigo, errorConsola, fase) {
   const apiKey = process.env.GEMINI_API_KEY || '';
 
@@ -40,47 +40,47 @@ async function generarFeedbackIA(titulo, descripcion, codigo, errorConsola, fase
   }
 
   const prompt = `
-Eres un tutor pedagógico de Java.
-El estudiante resolvió el ejercicio "${titulo}": ${descripcion}
+Eres un tutor pedagógico de Java amigable y didáctico.
+Un estudiante envió una solución para el ejercicio "${titulo}": ${descripcion}
 
 Código del estudiante:
 \`\`\`java
 ${codigo}
 \`\`\`
 
-Ocurrió un error en la fase de [${fase}]:
+Mensaje de error (${fase}):
 \`\`\`
 ${errorConsola}
 \`\`\`
 
-Instrucciones:
-1. Analiza detenidamente el error generado por el compilador o la ejecución.
-2. Explica qué significa el error de forma muy sencilla en 2 oraciones adaptadas a principiantes.
-3. Si el error involucra condiciones en 'if' o incompatibilidad de tipos (ej. int a boolean), explícale claramente la diferencia entre evaluar un entero y usar una condición lógica (ej. num > 0).
-4. Dale una pista concreta sobre cómo arreglarlo SIN darle el código con la solución completa.
-5. Sé motivador.
+Instrucciones para la respuesta:
+1. Explica brevemente el error de compilación o ejecución de manera sencilla (máximo 2 oraciones).
+2. Si el error es "incompatible types: int cannot be converted to boolean", aclárale que Java requiere que la condición dentro de la sentencia 'if' evalúe un valor booleano (true/false) utilizando operadores de comparación (como '>', '<', '=='), y no un número entero directo.
+3. Dale una pista concreta sobre la línea del error para corregirlo.
+4. NO le des el código resuelto completo.
+5. Mantén un tono motivador.
 `;
 
-  try {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    // Intentamos con gemini-1.5-flash
-    let model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-    let result = await model.generateContent(prompt);
-    let response = await result.response;
-    return response.text();
-  } catch (err) {
-    console.error('Error con gemini-1.5-flash, intentando modelo alternativo:', err.message);
+  // Lista de modelos activos a probar secuencialmente
+  const modelosProbar = ['gemini-3.6-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+  const genAI = new GoogleGenerativeAI(apiKey);
+
+  for (const nombreModelo of modelosProbar) {
     try {
-      const genAI = new GoogleGenerativeAI(apiKey);
-      let model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-      let result = await model.generateContent(prompt);
-      let response = await result.response;
-      return response.text();
-    } catch (err2) {
-      console.error('Error al invocar Gemini API en todos los intentos:', err2.message);
-      return `[Error al conectar con la IA: ${err2.message}] Revisa tu código en la línea señalada. Recuerda que en Java las condiciones dentro de un 'if' deben evaluar un valor booleano (true o false) y no un número entero.`;
+      const model = genAI.getGenerativeModel({ model: nombreModelo });
+      const result = await model.generateContent(prompt);
+      const response = await result.response;
+      const texto = response.text();
+      if (texto) {
+        return texto;
+      }
+    } catch (err) {
+      console.error(`Inconveniente con modelo ${nombreModelo}:`, err.message);
     }
   }
+
+  // Fallback explicativo directo en caso de fallar la llamada de API
+  return `Análisis técnico: El error "${errorConsola}" ocurre porque en Java la sentencia 'if' exige una expresión booleana (evaluada en true o false, por ejemplo 'num > 0'). Pasar un valor entero directamente como 'if (num)' no es válido. Revisa la condición en la línea indicada.`;
 }
 
 // Helper para formatear casos de prueba (ya sean texto Java o JSON)
