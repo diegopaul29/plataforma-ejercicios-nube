@@ -69,38 +69,41 @@ Instrucciones:
 4. Mantén un tono alentador.
 `;
 
-  try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
-    
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [{ text: promptText }]
-          }
-        ]
-      })
-    });
+  // Modelos a probar en orden de disponibilidad
+  const modelos = ['gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-1.5-flash-latest'];
 
-    const data = await response.json();
+  for (const modelo of modelos) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent?key=${apiKey}`;
+      
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [{ text: promptText }]
+            }
+          ]
+        })
+      });
 
-    if (!response.ok) {
-      console.error('Error devuelto por la API de Google Gemini:', JSON.stringify(data));
-      return `Error en la API de Google (${response.status}): ${data.error?.message || 'Verifica la clave GEMINI_API_KEY en Render.'}`;
+      const data = await response.json();
+
+      if (response.ok) {
+        const respuestaTexto = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (respuestaTexto) {
+          return respuestaTexto;
+        }
+      } else {
+        console.warn(`Error con modelo ${modelo} (${response.status}):`, data.error?.message);
+      }
+    } catch (err) {
+      console.error(`Error de red intentando conectar con ${modelo}:`, err.message);
     }
-
-    const respuestaTexto = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (respuestaTexto) {
-      return respuestaTexto;
-    }
-
-    return 'No se obtuvo respuesta del modelo. Revisa el mensaje en la consola de Java.';
-  } catch (err) {
-    console.error('Error al realizar la petición HTTP a Gemini:', err.message);
-    return `Ocurrió un error al conectar con la IA (${err.message}). Revisa el mensaje de compilación en la consola.`;
   }
+
+  return 'No se pudo obtener feedback de la IA. Por favor verifica la clave GEMINI_API_KEY en Render.';
 }
 
 // Helper para formatear casos de prueba
