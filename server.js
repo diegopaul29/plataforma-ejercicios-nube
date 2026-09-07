@@ -69,8 +69,8 @@ Instrucciones:
 4. Mantén un tono alentador.
 `;
 
-  // Modelos actualizados para la API v1beta
-  const modelos = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+  // Modelos activos y soportados en la API REST v1beta
+  const modelos = ['gemini-2.5-flash', 'gemini-flash'];
   let ultimoErrorGoogle = '';
 
   for (const modelo of modelos) {
