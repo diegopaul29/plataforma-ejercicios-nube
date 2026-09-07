@@ -12,12 +12,13 @@
     ul { list-style: none; padding: 0; }
     li { padding: 8px; margin-bottom: 5px; background: #eee; cursor: pointer; border-radius: 4px; }
     li:hover { background: #ddd; }
-    textarea { width: 100%; height: 200px; font-family: monospace; }
-    button { background: #28a745; color: white; border: none; padding: 10px 15px; cursor: pointer; border-radius: 4px; font-size: 16px; }
+    textarea { width: 100%; height: 220px; font-family: monospace; font-size: 14px; }
+    button { background: #28a745; color: white; border: none; padding: 10px 15px; cursor: pointer; border-radius: 4px; font-size: 16px; margin-top: 10px; }
     button:hover { background: #218838; }
-    .feedback { margin-top: 15px; padding: 10px; border-radius: 4px; }
-    .success { background: #d4edda; color: #155724; }
-    .error { background: #f8d7da; color: #721c24; }
+    .feedback { margin-top: 15px; padding: 15px; border-radius: 4px; }
+    .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+    .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+    pre { background: #f1f1f1; padding: 10px; border-radius: 4px; overflow-x: auto; color: #333; }
   </style>
 </head>
 <body>
@@ -33,7 +34,7 @@
       <h2 id="titulo">Selecciona un ejercicio</h2>
       <p id="descripcion"></p>
       
-      <textarea id="codigo" placeholder="Escribe tu solución en Java aquí..."></textarea><br><br>
+      <textarea id="codigo" placeholder="Escribe tu solución en Java aquí..."></textarea><br>
       <button onclick="evaluarCodigo()">Enviar Solución</button>
 
       <div id="resultado"></div>
@@ -43,32 +44,37 @@
   <script>
     let ejercicioActualId = null;
 
-    // Cargar la lista de ejercicios al iniciar
     async function cargarEjercicios() {
-      const res = await fetch('/api/ejercicios');
-      const data = await res.json();
-      const lista = document.getElementById('lista-ejercicios');
-      lista.innerHTML = '';
-      data.forEach(ej => {
-        const li = document.createElement('li');
-        li.textContent = `${ej.id}. ${ej.titulo} (${ej.dificultad})`;
-        li.onclick = () => seleccionarEjercicio(ej.id);
-        lista.appendChild(li);
-      });
+      try {
+        const res = await fetch('/api/ejercicios');
+        const data = await res.json();
+        const lista = document.getElementById('lista-ejercicios');
+        lista.innerHTML = '';
+        data.forEach(ej => {
+          const li = document.createElement('li');
+          li.textContent = `${ej.id}. ${ej.titulo} (${ej.dificultad})`;
+          li.onclick = () => seleccionarEjercicio(ej.id);
+          lista.appendChild(li);
+        });
+      } catch (e) {
+        document.getElementById('lista-ejercicios').innerHTML = 'Error al cargar ejercicios.';
+      }
     }
 
-    // Cargar el ejercicio seleccionado
     async function seleccionarEjercicio(id) {
       ejercicioActualId = id;
-      const res = await fetch(`/api/ejercicios/${id}`);
-      const ej = await res.json();
-      document.getElementById('titulo').textContent = ej.titulo;
-      document.getElementById('descripcion').textContent = ej.descripcion;
-      document.getElementById('codigo').value = ej.plantilla_codigo;
-      document.getElementById('resultado').innerHTML = '';
+      try {
+        const res = await fetch(`/api/ejercicios/${id}`);
+        const ej = await res.json();
+        document.getElementById('titulo').textContent = `${ej.id}. ${ej.titulo}`;
+        document.getElementById('descripcion').textContent = ej.descripcion;
+        document.getElementById('codigo').value = ej.plantilla_codigo || '';
+        document.getElementById('resultado').innerHTML = '';
+      } catch (e) {
+        console.error('Error al cargar detalle del ejercicio:', e);
+      }
     }
 
-    // Enviar código para evaluar
     async function evaluarCodigo() {
       if (!ejercicioActualId) return alert('Selecciona un ejercicio primero.');
       
@@ -76,23 +82,50 @@
       const resContainer = document.getElementById('resultado');
       resContainer.innerHTML = 'Evaluando código...';
 
-      const res = await fetch('/api/evaluar', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ejercicioId: ejercicioActualId, codigoAlumno })
-      });
+      try {
+        const res = await fetch('/api/evaluar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ejercicioId: ejercicioActualId, codigoAlumno })
+        });
 
-      const data = await res.json();
-      if (data.exito) {
-        resContainer.innerHTML = `<div class="feedback success"><strong>¡Éxito!</strong> ${data.mensaje}</div>`;
-      } else {
+        const data = await res.json();
+
+        // Si el servidor devolvió un error HTTP (por ejemplo, 500)
+        if (!res.ok) {
+          resContainer.innerHTML = `
+            <div class="feedback error">
+              <strong>Error del Servidor (${res.status}):</strong>
+              <pre>${data.error || 'Ocurrió un error inesperado en el servidor.'}</pre>
+            </div>`;
+          return;
+        }
+
+        // Si el código fue correcto
+        if (data.exito) {
+          resContainer.innerHTML = `
+            <div class="feedback success">
+              <strong>¡Éxito!</strong>
+              <p>${data.mensaje}</p>
+              ${data.consola ? `<pre>${data.consola}</pre>` : ''}
+            </div>`;
+        } else {
+          // Si hubo un error en el código Java
+          resContainer.innerHTML = `
+            <div class="feedback error">
+              <strong>${data.tipoError || 'Error de Evaluación'}:</strong>
+              <pre>${data.consola || 'Sin detalles de consola'}</pre>
+              <hr>
+              <strong>Pista / Feedback de la IA:</strong>
+              <p>${data.feedbackIA || 'No se generó sugerencia de la IA.'}</p>
+            </div>`;
+        }
+
+      } catch (err) {
         resContainer.innerHTML = `
           <div class="feedback error">
-            <strong>Error (${data.tipoError}):</strong>
-            <pre>${data.consola}</pre>
-            <hr>
-            <strong>Pista / Feedback de la IA:</strong>
-            <p>${data.feedbackIA}</p>
+            <strong>Error de Conexión:</strong>
+            <p>${err.message}</p>
           </div>`;
       }
     }
