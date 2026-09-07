@@ -35,7 +35,7 @@ function limpiarRutasServidor(rawError) {
   return rawError.replace(/\/opt\/[^\s:]+\/Solucion\.java:/g, 'Línea ');
 }
 
-// Helper para consultar la API de Gemini vía HTTP FETCH directo (Soporta claves AQ.Ab8... y AIzaSy...)
+// Helper para consultar la API de Gemini vía HTTP FETCH directo
 async function generarFeedbackIA(titulo, descripcion, codigo, errorConsola, fase) {
   const apiKey = (process.env.GEMINI_API_KEY || '').trim();
   const errorLimpio = limpiarRutasServidor(errorConsola);
@@ -69,8 +69,8 @@ Instrucciones:
 4. Mantén un tono alentador.
 `;
 
-  // Modelos compatibles con la API REST v1beta
-  const modelos = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.5-flash'];
+  // Modelos actualizados para la API v1beta
+  const modelos = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
   let ultimoErrorGoogle = '';
 
   for (const modelo of modelos) {
@@ -81,7 +81,7 @@ Instrucciones:
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
-          'x-goog-api-key': apiKey // Envío seguro en header para nuevos formatos de claves
+          'x-goog-api-key': apiKey
         },
         body: JSON.stringify({
           contents: [
@@ -101,7 +101,7 @@ Instrucciones:
         }
       } else {
         console.error(`[Gemini API Log] Error con ${modelo} (${response.status}):`, JSON.stringify(data));
-        ultimoErrorGoogle = `(${response.status}): ${data.error?.message || 'Error de permisos'}`;
+        ultimoErrorGoogle = `(${response.status}): ${data.error?.message || 'Error de API'}`;
       }
     } catch (err) {
       console.error(`[Gemini API Log] Error de conexión con ${modelo}:`, err.message);
