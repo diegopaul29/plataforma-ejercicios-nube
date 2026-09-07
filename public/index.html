@@ -2,99 +2,102 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <title>Plataforma de Ejercicios Condicionales</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Plataforma de Ejercicios Java</title>
   <style>
-    body { font-family: sans-serif; margin: 0; display: flex; height: 100vh; background-color: #1e1e1e; color: #fff; }
-    #sidebar { width: 300px; background: #252526; padding: 15px; overflow-y: auto; border-right: 1px solid #333; }
-    #main { flex: 1; display: flex; flex-direction: column; padding: 20px; }
-    .item-ejercicio { padding: 10px; cursor: pointer; border-bottom: 1px solid #333; }
-    .item-ejercicio:hover { background: #37373d; }
-    #editor-container { height: 350px; border: 1px solid #444; margin: 15px 0; }
-    button { background: #0e639c; color: white; border: none; padding: 10px 20px; cursor: pointer; font-size: 16px; border-radius: 4px; }
-    button:hover { background: #1177bb; }
-    #resultado { margin-top: 15px; padding: 15px; border-radius: 4px; white-space: pre-wrap; }
-    .exito { background: #1e4620; border: 1px solid #2e7d32; }
-    .error { background: #5a1d1d; border: 1px solid #d32f2f; }
+    body { font-family: Arial, sans-serif; margin: 20px; background-color: #f4f4f9; }
+    .container { display: flex; gap: 20px; }
+    .sidebar { width: 30%; background: #fff; padding: 15px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+    .main { width: 70%; background: #fff; padding: 15px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+    ul { list-style: none; padding: 0; }
+    li { padding: 8px; margin-bottom: 5px; background: #eee; cursor: pointer; border-radius: 4px; }
+    li:hover { background: #ddd; }
+    textarea { width: 100%; height: 200px; font-family: monospace; }
+    button { background: #28a745; color: white; border: none; padding: 10px 15px; cursor: pointer; border-radius: 4px; font-size: 16px; }
+    button:hover { background: #218838; }
+    .feedback { margin-top: 15px; padding: 10px; border-radius: 4px; }
+    .success { background: #d4edda; color: #155724; }
+    .error { background: #f8d7da; color: #721c24; }
   </style>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.36.1/min/vs/loader.min.js"></script>
 </head>
 <body>
-  <div id="sidebar">
-    <h2>30 Ejercicios</h2>
-    <div id="lista-ejercicios">Cargando...</div>
+
+  <h1>Plataforma de Prácticas Java</h1>
+  <div class="container">
+    <div class="sidebar">
+      <h3>Ejercicios</h3>
+      <ul id="lista-ejercicios">Cargando...</ul>
+    </div>
+
+    <div class="main">
+      <h2 id="titulo">Selecciona un ejercicio</h2>
+      <p id="descripcion"></p>
+      
+      <textarea id="codigo" placeholder="Escribe tu solución en Java aquí..."></textarea><br><br>
+      <button onclick="evaluarCodigo()">Enviar Solución</button>
+
+      <div id="resultado"></div>
+    </div>
   </div>
-  <div id="main">
-    <h2 id="titulo">Selecciona un ejercicio</h2>
-    <p id="descripcion"></p>
-    <div id="editor-container"></div>
-    <button onclick="ejecutarCodigo()">Ejecutar Código</button>
-    <div id="resultado"></div>
-  </div>
+
   <script>
-    let editor;
     let ejercicioActualId = null;
 
-    require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.36.1/min/vs' } });
-    require(['vs/editor/editor.main'], function () {
-      editor = monaco.editor.create(document.getElementById('editor-container'), {
-        value: '// Selecciona un ejercicio para empezar',
-        language: 'javascript',
-        theme: 'vs-dark',
-        automaticLayout: true
-      });
-    });
-
-    async function cargarLista() {
+    // Cargar la lista de ejercicios al iniciar
+    async function cargarEjercicios() {
       const res = await fetch('/api/ejercicios');
       const data = await res.json();
-      const cont = document.getElementById('lista-ejercicios');
-      cont.innerHTML = '';
+      const lista = document.getElementById('lista-ejercicios');
+      lista.innerHTML = '';
       data.forEach(ej => {
-        const div = document.createElement('div');
-        div.className = 'item-ejercicio';
-        div.innerText = `${ej.titulo} [${ej.dificultad}]`;
-        div.onclick = () => cargarEjercicio(ej.id);
-        cont.appendChild(div);
+        const li = document.createElement('li');
+        li.textContent = `${ej.id}. ${ej.titulo} (${ej.dificultad})`;
+        li.onclick = () => seleccionarEjercicio(ej.id);
+        lista.appendChild(li);
       });
     }
 
-    async function cargarEjercicio(id) {
+    // Cargar el ejercicio seleccionado
+    async function seleccionarEjercicio(id) {
       ejercicioActualId = id;
       const res = await fetch(`/api/ejercicios/${id}`);
       const ej = await res.json();
-      document.getElementById('titulo').innerText = ej.titulo;
-      document.getElementById('descripcion').innerText = ej.descripcion;
-      editor.setValue(ej.plantilla_codigo);
-      document.getElementById('resultado').innerText = '';
-      document.getElementById('resultado').className = '';
+      document.getElementById('titulo').textContent = ej.titulo;
+      document.getElementById('descripcion').textContent = ej.descripcion;
+      document.getElementById('codigo').value = ej.plantilla_codigo;
+      document.getElementById('resultado').innerHTML = '';
     }
 
-    async function ejecutarCodigo() {
+    // Enviar código para evaluar
+    async function evaluarCodigo() {
       if (!ejercicioActualId) return alert('Selecciona un ejercicio primero.');
-      const resultadoDiv = document.getElementById('resultado');
-      resultadoDiv.innerText = 'Ejecutando y analizando con IA...';
-      resultadoDiv.className = '';
+      
+      const codigoAlumno = document.getElementById('codigo').value;
+      const resContainer = document.getElementById('resultado');
+      resContainer.innerHTML = 'Evaluando código...';
 
-      const res = await fetch('/api/ejecutar', {
+      const res = await fetch('/api/evaluar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ejercicioId: ejercicioActualId,
-          codigoUsuario: editor.getValue()
-        })
+        body: JSON.stringify({ ejercicioId: ejercicioActualId, codigoAlumno })
       });
 
       const data = await res.json();
       if (data.exito) {
-        resultadoDiv.innerText = data.mensaje;
-        resultadoDiv.className = 'exito';
+        resContainer.innerHTML = `<div class="feedback success"><strong>¡Éxito!</strong> ${data.mensaje}</div>`;
       } else {
-        resultadoDiv.innerText = " Diagnóstico de la IA:\n\n" + data.diagnosticoIA;
-        resultadoDiv.className = 'error';
+        resContainer.innerHTML = `
+          <div class="feedback error">
+            <strong>Error (${data.tipoError}):</strong>
+            <pre>${data.consola}</pre>
+            <hr>
+            <strong>Pista / Feedback de la IA:</strong>
+            <p>${data.feedbackIA}</p>
+          </div>`;
       }
     }
 
-    cargarLista();
+    cargarEjercicios();
   </script>
 </body>
 </html>
